@@ -1,7 +1,9 @@
 # ============================================
 # ربات تحلیل طلا + هشدار تلگرام
+# نسخه: 3.0 - با فیلتر سیگنال
 # ============================================
 
+import os
 import pandas as pd
 import numpy as np
 import requests
@@ -12,13 +14,16 @@ from enum import Enum
 
 
 # ========== تنظیمات ==========
-TWELVEDATA_KEY = "37e367dc28fb45a89a1eb0c3c4f84c13"   # ← کلید TwelveData خودت
-TELEGRAM_TOKEN = "8808586388:AAHivQVFvcxXw_oDdK635e6hYwxuiLf_oaQ"   # ← Token ربات
-TELEGRAM_CHAT_ID = "80744153"   # ← Chat ID خودت
+TWELVEDATA_KEY = os.environ.get("TWELVEDATA_KEY")
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
 SYMBOL = "XAU/USD"
 ACCOUNT_BALANCE = 10000
 RISK_PERCENT = 1.0
+
+# ========== تنظیمات فیلتر سیگنال ==========
+MIN_SCORE = 75  # حداقل امتیاز برای ارسال پیام
 
 
 # ========== ENUMS ==========
@@ -409,17 +414,14 @@ print(f"✅ LTF: {len(df_ltf)} کندل")
 
 bot = GoldBot()
 
-# ========== تحلیل هر دو جهت ==========
 print("\n🔍 تحلیل BUY...")
 r_buy = bot.analyze(df_htf, df_mtf, df_ltf, Direction.BUY)
 
 print("🔍 تحلیل SELL...")
 r_sell = bot.analyze(df_htf, df_mtf, df_ltf, Direction.SELL)
 
-# انتخاب بهترین
 best = r_buy if r_buy['total'] >= r_sell['total'] else r_sell
 
-# ========== چاپ در کنسول ==========
 print("\n" + "=" * 55)
 print(f"🥇 {SYMBOL}")
 print(f"💰 قیمت: {best['entry']:.2f}")
@@ -438,33 +440,47 @@ if best['vetoes']:
 
 print("=" * 55)
 
-# ========== ارسال به تلگرام ==========
-msg_lines = [
-    f"<b>🥇 {SYMBOL}</b>",
-    f"<b>جهت:</b> {best['direction'].value}",
-    f"<b>قیمت:</b> {best['entry']:.2f}",
-    f"<b>امتیاز:</b> {best['total']:.1f}%",
-    f"<b>تصمیم:</b> {best['decision'].value}",
-]
+# ========== فیلتر سیگنال ==========
+ALLOWED_DECISIONS = [Decision.STRONG_ENTRY, Decision.CAUTIOUS_ENTRY]
 
-if best['vetoes']:
-    msg_lines.append("\n<b>⛔ وتوها:</b>")
-    for v in best['vetoes']:
-        msg_lines.append(v)
+should_send = (
+    best['total'] >= MIN_SCORE and
+    best['decision'] in ALLOWED_DECISIONS
+)
 
-if best['risk'].sl_price:
-    msg_lines.extend([
-        f"\n<b>💡 جزئیات:</b>",
-        f"Entry: {best['entry']:.2f}",
-        f"SL: {best['risk'].sl_price:.2f}",
-        f"TP: {best['risk'].tp_price:.2f}",
-        f"R:R: 1:{best['risk'].rr_ratio:.2f}",
-        f"Size: {best['risk'].position_size} lot",
-    ])
+if should_send:
+    msg_lines = [
+        f"<b>🥇 {SYMBOL}</b>",
+        f"<b>جهت:</b> {best['direction'].value}",
+        f"<b>قیمت:</b> {best['entry']:.2f}",
+        f"<b>امتیاز:</b> {best['total']:.1f}%",
+        f"<b>تصمیم:</b> {best['decision'].value}",
+    ]
 
-msg_lines.append(f"\n📊 BUY: {r_buy['total']:.1f}% | SELL: {r_sell['total']:.1f}%")
-msg_lines.append(f"🕐 {datetime.now(timezone.utc).strftime('%H:%M UTC')}")
+    if best['vetoes']:
+        msg_lines.append("\n<b>⛔ وتوها:</b>")
+        for v in best['vetoes']:
+            msg_lines.append(v)
 
-send_telegram("\n".join(msg_lines))
+    if best['risk'].sl_price:
+        msg_lines.extend([
+            f"\n<b>💡 جزئیات:</b>",
+            f"Entry: {best['entry']:.2f}",
+            f"SL: {best['risk'].sl_price:.2f}",
+            f"TP: {best['risk'].tp_price:.2f}",
+            f"R:R: 1:{best['risk'].rr_ratio:.2f}",
+            f"Size: {best['risk'].position_size} lot",
+        ])
 
-print("\n✅ تمام شد! پیام تلگرام چک کن.")
+    msg_lines.append(f"\n📊 BUY: {r_buy['total']:.1f}% | SELL: {r_sell['total']:.1f}%")
+    msg_lines.append(f"🕐 {datetime.now(timezone.utc).strftime('%H:%M UTC')}")
+
+    send_telegram("\n".join(msg_lines))
+    print("📤 پیام تلگرام ارسال شد (سیگنال قوی) ✅")
+else:
+    if best['total'] < MIN_SCORE:
+        print(f"🔕 سیگنال ضعیف: امتیاز {best['total']:.1f}% < {MIN_SCORE}% - پیام ارسال نشد")
+    else:
+        print(f"🔕 تصمیم غیرمجاز: {best['decision'].value} - پیام ارسال نشد")
+
+print("\n✅ تمام شد!")
